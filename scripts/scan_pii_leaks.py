@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sys
 import uuid
 
@@ -24,7 +25,12 @@ def main() -> int:
         blobs.append(json.dumps(consumer.decode(msg)).lower())
     consumer.close()
     text = " ".join(blobs)
-    leaks = [(r["name"], t) for r in RESUMES for t in [r["email"], r["phone"], *r["name"].split()] if t and t.lower() in text]
+    def present(token: str) -> bool:
+        return re.search(rf"(?<![\w@]){re.escape(token.lower())}(?![\w@])", text) is not None
+
+    # Whole-word match (so "Tom" does not match "automation"). The corrupted resume is never parsed, so it is skipped.
+    leaks = [(r["name"], t) for r in RESUMES if r["text"].strip()
+             for t in [r["email"], r["phone"], *r["name"].split()] if t and present(t)]
     print(f"scanned {len(blobs)} message(s) on {topic}; leaks: {leaks or 'none'}")
     return 1 if leaks else 0
 

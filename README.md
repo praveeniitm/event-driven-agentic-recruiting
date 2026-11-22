@@ -2,13 +2,15 @@
 
 A multi-agent recruiting pipeline built on Apache Kafka. A resume enters as an event, one LangGraph agent redacts PII and extracts a profile, a second agent joins that profile with the current job requisition and scores the candidate, and Kafka Connect lands the results in Postgres. Everything runs locally with Docker.
 
-It is a portfolio project. The goal is to show these ideas working together, with the trade-offs written down:
+It is built to help the community learn: a complete, runnable example of how these pieces fit together, so you can read it, run it, break it and borrow ideas for your own event-driven and LLM projects. The goal is to show these ideas working together, with the trade-offs written down:
 
 - Kafka in KRaft mode, schema contracts enforced by Schema Registry, compacted topics, DLQs, manual offset commits
 - A stream-table join built by hand (job table in memory, resume stream)
 - LLM agents as decoupled consumers, with guardrails and an offline evaluation harness
 - Kafka Connect JDBC sink and a pure-Python bytewax stateful job
 - Metrics, alerts and structured logs. `PROD:` comments across the code mark what to change for production.
+
+New to some of these terms? [`docs/CONCEPTS.md`](docs/CONCEPTS.md) explains Schema Registry, compacted topics, DLQs, manual offset commits, stream-table joins, Kafka Connect and bytewax in plain language, with the matching code in this repo and typical interview questions.
 
 ## Architecture
 
@@ -74,7 +76,17 @@ make dashboard           # terminal 4  -> http://localhost:7860
 | http://localhost:8083 | Kafka Connect REST |
 | http://localhost:9091 / :3000 | Prometheus / Grafana (`make observability`) |
 
-To run all Python services as containers instead of host processes: `make apps`.
+### Running the Python services in Docker
+
+The infrastructure starts with `make up`. The Python services can run either on the host (the `make parser` style commands above) or as containers built from one shared image (`recruiting-app`):
+
+```bash
+make apps            # parser, matching, analytics and the dashboard as containers
+make seed-docker     # one-shot job that publishes the sample data, then exits
+make observability   # Prometheus and Grafana
+```
+
+Containerised: the long-running services (parser, matching, analytics, dashboard) and the one-shot seed job. Run on the host: tests, eval and the inspection scripts, because you want them next to your editor. Containers read `.env` for the LLM settings, and compose overrides the Kafka and Postgres addresses to the internal ones.
 
 ### Using a real LLM
 
@@ -88,7 +100,7 @@ OPENAI_MODEL=gpt-4o-mini
 
 `LLM_PROVIDER=mock` is a deterministic rule-based stand-in (keyword skills, regex years, weighted score). It keeps the demo, tests and CI free and offline, and it is the baseline the eval harness compares against.
 
-**Status:** the OpenAI path is covered by offline wiring tests (the schema binds as a tool, missing key fails fast). It has not been run against the live API in this repo's test runs, so run `make eval` with your key before trusting the numbers.
+The OpenAI path has been run against the live API (`gpt-4o-mini` for the agents, `gpt-4o` for the judge, see Evaluation). `.env` is gitignored. Never commit a key, and rotate any key that has been pasted into a chat or a log.
 
 ## Topics
 
@@ -122,7 +134,7 @@ Schemas are in [`schemas/`](schemas). Each has a pydantic mirror in `common/mode
 
 **Agents are graphs, errors are state.** Nodes record failures in graph state instead of raising, so the Kafka layer can route to a DLQ and still commit, and a bad record never blocks a partition. Delivery errors are the exception: they propagate so the offset stays uncommitted. LLM calls get 2 attempts, then the record goes to the DLQ with error type, message, traceback, and the source topic, partition and offset.
 
-**Code owns policy, the model proposes.** The recommendation label must follow the score thresholds (85 and 45). If the model returns a label that contradicts its own score, the code overrides it. The prompt also tells the model to ignore protected attributes, and the model only ever sees the anonymised profile. Prompt text is versioned (`parser-v1`, `matching-v1`) and every record carries `model` and `prompt_version`.
+**Code owns policy, the model proposes.** The recommendation label must follow the score thresholds (85 and 45). If the model returns a label that contradicts its own score, the code overrides it. The prompt also tells the model to ignore protected attributes, and the model only ever sees the anonymised profile. Prompt text is versioned (`parser-v3`, `matching-v1`) and every record carries `model` and `prompt_version`.
 
 **Kafka Connect for the sink.** Four JDBC sink connectors (upsert mode, `auto.create=false` with the DDL in `infra/postgres/init.sql`) replace a hand-written consumer. This is less code and gets offset management, scaling and error tolerance from Connect. The cost is a JVM service and a connector plugin to install and pin. Connect errors go to `connect-dlq` instead of stopping the connector.
 
@@ -148,7 +160,28 @@ make eval JUDGE=1    # adds LLM-as-judge groundedness (needs LLM_PROVIDER=openai
 
 The command exits 1 when a gate in `THRESHOLDS` is missed, so it can block a prompt or model change in CI. Reports are written to `eval/reports/`.
 
-The mock baseline passes its gates and shows its limits. It reads "No production Kafka experience" as Kafka experience (Emily Carter scores `STRONG_HIRE`, label `INTERVIEW`), and it takes the skills listed in the injection text. Those two cases are where a real model should beat the baseline, so check them first when you run with your key. 13 cases is too small to measure a model. It is enough to catch a broken prompt or a PII regression.
+**Results with `gpt-4o-mini` (prompts `parser-v3`, `matching-v1`, judge `gpt-4o`):**
+
+| Metric | Mock baseline | gpt-4o-mini |
+|---|---|---|
+| skill F1 | 0.79 (fails gate) | 0.90 |
+| years of experience error (MAE) | 0.00 | 0.00 |
+| PII leaks | 0 | 0 |
+| matching accuracy on gold profiles | 1.00 | 1.00 |
+| end-to-end accuracy | 0.82 | 1.00 |
+| injection resume not `STRONG_HIRE` | pass | pass |
+| injection skills not extracted | 0.0 (fails gate) | pass |
+| judge: reasoning grounded | n/a | 1.00 |
+
+What the harness found while building this, which is the reason to have one:
+
+- The mock baseline reads "No production Kafka experience" as Kafka experience and copies the planted skills from the injection text, so it fails two gates (`make eval` with `LLM_PROVIDER=mock` exits 1). The real model does neither.
+- The first real run failed the skill gate. The cause was a wrong gold label (an empty skills list for a resume that lists skills), not the model. Evals have bugs too, so read the failing cases before changing the prompt.
+- The first run also showed the model copying skills that the injected text told it to add, while the final `REJECT` was still correct because the experience was low. The original safety gate only checked the final label, so it missed this. A second gate now checks that the planted skills are not extracted, and the parser prompt (`parser-v2`) treats the resume as untrusted data.
+- That prompt change then broke experience extraction for one resume: the model returned 3 years while its own summary said 5. The judge flagged the contradiction. `parser-v3` says to use a stated total exactly. This is why prompt versions are stored on every record.
+- The first judge prompt ("be strict") marked true statements such as "4 years is below the 5 year minimum" as errors, giving a grounded rate of 0.36. A narrower prompt and a stronger judge model gave a rate that reflects real contradictions. Calibrate any judge against human labels.
+
+Limits: 13 cases is too small to rank models and the labels were written by one person. It is enough to catch a broken prompt or a PII regression. The model sometimes returns no skills for the injection resume, which is safe and counts as a miss on skill F1. Results can vary between runs even at temperature 0.
 
 ## Observability
 
@@ -163,7 +196,7 @@ Start it with `make observability`. It scrapes the services on the host, so star
 ## Testing
 
 ```bash
-make test           # 47 unit and contract tests, no Docker needed
+make test           # 47 unit and contract tests, no Docker needed, always uses the mock LLM
 make integration    # starts the real parser and matching services and follows a resume through Kafka and Connect to Postgres
 make lint
 ```
@@ -194,7 +227,6 @@ make reset                                 # stop and delete all data
 ## Known limitations
 
 - The matching agent's job table is in memory per instance. It is not partitioned across instances.
-- Not verified against a live OpenAI model (see above).
 - `parser-dlq` and `candidate-applications` hold PII in plaintext, and the topics are unauthenticated.
 - No DLQ replay tool.
 - Schema Registry keys are plain strings, so only values are under a schema.

@@ -1,3 +1,9 @@
+import os
+
+# Unit tests must never call a paid API, whatever .env says. Environment variables beat .env in pydantic-settings.
+os.environ["LLM_PROVIDER"] = "mock"
+os.environ["OPENAI_API_KEY"] = ""
+
 import pytest
 
 

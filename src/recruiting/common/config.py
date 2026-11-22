@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     llm_provider: str = "mock"  # openai | mock
     openai_api_key: str = ""
     openai_model: str = "gpt-4o-mini"
+    openai_judge_model: str = "gpt-4o"  # judge should be at least as strong as the model it grades
     llm_timeout_seconds: int = 30
 
     postgres_dsn: str = "postgresql://recruiting:recruiting@localhost:5432/recruiting"

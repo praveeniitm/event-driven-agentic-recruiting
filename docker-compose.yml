@@ -169,6 +169,7 @@ services:
   parser:
     profiles: ["apps"]
     build: .
+    image: recruiting-app:latest   # one image shared by every Python service, built once
     container_name: recruiting-parser
     command: ["python", "-m", "recruiting.services.parser"]
     env_file: [{path: .env, required: false}]
@@ -185,6 +186,7 @@ services:
   matching:
     profiles: ["apps"]
     build: .
+    image: recruiting-app:latest   # one image shared by every Python service, built once
     container_name: recruiting-matching
     command: ["python", "-m", "recruiting.services.matching"]
     env_file: [{path: .env, required: false}]
@@ -196,6 +198,7 @@ services:
   analytics:
     profiles: ["apps"]
     build: .
+    image: recruiting-app:latest   # one image shared by every Python service, built once
     container_name: recruiting-analytics
     command: ["python", "-m", "recruiting.services.analytics"]
     env_file: [{path: .env, required: false}]
@@ -207,6 +210,7 @@ services:
   dashboard:
     profiles: ["apps"]
     build: .
+    image: recruiting-app:latest   # one image shared by every Python service, built once
     container_name: recruiting-dashboard
     command: ["python", "app.py"]
     env_file: [{path: .env, required: false}]
@@ -218,6 +222,17 @@ services:
         condition: service_healthy
     ports: ["7860:7860"]
     restart: unless-stopped
+
+  # One-shot job: publishes the sample jobs and resumes, then exits.   docker compose --profile tools run --rm -T seed
+  seed:
+    profiles: ["tools"]
+    build: .
+    image: recruiting-app:latest   # one image shared by every Python service, built once
+    container_name: recruiting-seed
+    command: ["python", "-m", "recruiting.services.producer", "seed", "--demo-compaction"]
+    environment: *app-env
+    depends_on: *app-deps
+    restart: "no"
 
   # ---------------------------------------------------------------------------------------------
   # Optional observability.   docker compose --profile observability up -d

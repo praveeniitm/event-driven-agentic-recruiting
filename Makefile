@@ -1,4 +1,4 @@
-.PHONY: help up down reset install seed parser matching analytics dashboard test integration eval lint inspect lag apps observability
+.PHONY: seed-docker help up down reset install seed parser matching analytics dashboard test integration eval lint inspect lag apps observability
 
 help:            ## list targets
 	@grep -E '^[a-z-]+:.*##' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  %-14s %s\n", $$1, $$2}'
@@ -13,6 +13,8 @@ install:         ## create .venv with Python 3.11 and install deps
 	uv sync
 seed:            ## publish 3 jobs and 10 resumes (one corrupted -> DLQ)
 	uv run python -m recruiting.services.producer seed --demo-compaction
+seed-docker:     ## same, but as a one-shot container
+	docker compose --profile tools run --rm -T seed
 parser:          ## run the parser agent on the host
 	uv run python -m recruiting.services.parser
 matching:        ## run the matching agent on the host

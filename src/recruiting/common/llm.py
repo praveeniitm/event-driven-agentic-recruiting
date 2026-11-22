@@ -31,7 +31,8 @@ def model_name(settings: Settings | None = None) -> str:
     return s.openai_model if s.llm_provider == "openai" else MOCK_MODEL_NAME
 
 
-def build_structured_llm(schema: type[T], mock_fn: MockFn, settings: Settings | None = None) -> Runnable:
+def build_structured_llm(schema: type[T], mock_fn: MockFn, settings: Settings | None = None,
+                         model: str | None = None) -> Runnable:
     s = settings or get_settings()
     if s.llm_provider == "mock":
         return RunnableLambda(mock_fn)
@@ -42,7 +43,7 @@ def build_structured_llm(schema: type[T], mock_fn: MockFn, settings: Settings | 
 
         # temperature=0 for repeatable output. max_retries=0 because the agent owns the retry policy (and DLQ routing).
         # PROD: add a fallback model, a circuit breaker, and per-tenant rate limits / budget caps.
-        llm = ChatOpenAI(model=s.openai_model, api_key=s.openai_api_key, temperature=0,
+        llm = ChatOpenAI(model=model or s.openai_model, api_key=s.openai_api_key, temperature=0,
                          timeout=s.llm_timeout_seconds, max_retries=0)
         # function_calling (not strict json_schema): tolerates Pydantic constraints (ge/le, list length); Pydantic re-validates the result.
         return llm.with_structured_output(schema, method="function_calling")
