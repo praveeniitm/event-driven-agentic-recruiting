@@ -1,0 +1,259 @@
+# One-command startup:  docker compose up -d
+# Everything is single-node and local. PROD notes are marked with "PROD:".
+name: recruiting
+
+services:
+  kafka:
+    image: confluentinc/cp-kafka:7.6.1
+    hostname: kafka
+    container_name: kafka
+    ports:
+      - "9092:9092"   # host listener for the Python services
+    environment:
+      # --- KRaft: one node is both broker and controller, no Zookeeper ---
+      # PROD: separate controller nodes (3) from brokers (3+).
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:29093
+      CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+      # Three listeners: INTERNAL (container to container), EXTERNAL (host), CONTROLLER (KRaft quorum)
+      KAFKA_LISTENERS: INTERNAL://kafka:29092,CONTROLLER://kafka:29093,EXTERNAL://0.0.0.0:9092
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:29092,EXTERNAL://localhost:9092
+      # PROD: SASL_SSL / mTLS listeners with ACLs instead of PLAINTEXT.
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      # Single broker, so internal topics cannot be replicated.
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      # Topics are created only by the init container, so a typo in a topic name fails loudly.
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      # PROD: expose JMX and scrape with a Prometheus JMX exporter for broker metrics.
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-topics --bootstrap-server kafka:29092 --list >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 15s
+
+  schema-registry:
+    image: confluentinc/cp-schema-registry:7.6.1
+    hostname: schema-registry
+    container_name: schema-registry
+    depends_on:
+      kafka:
+        condition: service_healthy
+    ports:
+      - "8081:8081"
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: kafka:29092
+      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
+      # PROD: run 2+ registry instances, enable auth + TLS.
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8081/subjects >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  # Init container: creates topics (exact partitions + compaction) and registers Avro schemas, then exits.
+  init:
+    build: ./infra/init
+    container_name: recruiting-init
+    depends_on:
+      kafka:
+        condition: service_healthy
+      schema-registry:
+        condition: service_healthy
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      SCHEMA_REGISTRY_URL: http://schema-registry:8081
+    volumes:
+      - ./infra/topics.json:/infra/topics.json:ro
+      - ./schemas:/schemas:ro
+    restart: "no"
+    # PROD: topics and schemas belong in Terraform / GitOps, with schema compatibility checked in CI.
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:v0.7.2
+    container_name: kafka-ui
+    depends_on:
+      init:
+        condition: service_completed_successfully
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+      KAFKA_CLUSTERS_0_SCHEMAREGISTRY: http://schema-registry:8081
+      KAFKA_CLUSTERS_0_KAFKACONNECT_0_NAME: connect
+      KAFKA_CLUSTERS_0_KAFKACONNECT_0_ADDRESS: http://kafka-connect:8083
+      DYNAMIC_CONFIG_ENABLED: "false"
+      # PROD: put the UI behind SSO and make it read-only.
+
+  # Kafka Connect: moves Kafka topics into Postgres with no custom consumer code (JDBC sink connectors).
+  kafka-connect:
+    build: ./infra/connect
+    container_name: kafka-connect
+    depends_on:
+      init:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8083:8083"
+    environment:
+      CONNECT_BOOTSTRAP_SERVERS: kafka:29092
+      CONNECT_REST_ADVERTISED_HOST_NAME: kafka-connect
+      CONNECT_REST_PORT: 8083
+      CONNECT_GROUP_ID: recruiting-connect
+      CONNECT_CONFIG_STORAGE_TOPIC: _connect-configs
+      CONNECT_OFFSET_STORAGE_TOPIC: _connect-offsets
+      CONNECT_STATUS_STORAGE_TOPIC: _connect-status
+      CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_KEY_CONVERTER: org.apache.kafka.connect.storage.StringConverter
+      CONNECT_VALUE_CONVERTER: io.confluent.connect.avro.AvroConverter
+      CONNECT_VALUE_CONVERTER_SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      CONNECT_PLUGIN_PATH: /usr/share/java,/usr/share/confluent-hub-components
+      # PROD: run 3+ workers in distributed mode, externalise secrets with a ConfigProvider (not plain passwords in connector JSON).
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8083/connectors >/dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+  # Registers/updates the connectors (PUT is idempotent), then exits.
+  connect-init:
+    image: curlimages/curl:8.8.0
+    container_name: recruiting-connect-init
+    depends_on:
+      kafka-connect:
+        condition: service_healthy
+    volumes:
+      - ./infra/connect/connectors:/connectors:ro
+      - ./infra/connect/register.sh:/register.sh:ro
+    entrypoint: ["sh", "/register.sh"]
+    restart: "no"
+    # PROD: manage connectors with GitOps / Terraform and a CI check, not a startup script.
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: recruiting-postgres
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: recruiting
+      POSTGRES_PASSWORD: recruiting   # PROD: secret from a vault, never a literal in compose.
+      POSTGRES_DB: recruiting
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+      - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro  # runs only on first start of an empty volume
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U recruiting -d recruiting"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ---------------------------------------------------------------------------------------------
+  # Optional: run the Python services in containers.   docker compose --profile apps up -d --build
+  # Without this profile, run them on the host with `make run-parser` etc.
+  # ---------------------------------------------------------------------------------------------
+  parser:
+    profiles: ["apps"]
+    build: .
+    container_name: recruiting-parser
+    command: ["python", "-m", "recruiting.services.parser"]
+    env_file: [{path: .env, required: false}]
+    environment: &app-env
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      SCHEMA_REGISTRY_URL: http://schema-registry:8081
+      POSTGRES_DSN: postgresql://recruiting:recruiting@postgres:5432/recruiting
+    depends_on: &app-deps
+      init:
+        condition: service_completed_successfully
+    ports: ["8001:8001"]
+    restart: unless-stopped
+
+  matching:
+    profiles: ["apps"]
+    build: .
+    container_name: recruiting-matching
+    command: ["python", "-m", "recruiting.services.matching"]
+    env_file: [{path: .env, required: false}]
+    environment: *app-env
+    depends_on: *app-deps
+    ports: ["8002:8002"]
+    restart: unless-stopped
+
+  analytics:
+    profiles: ["apps"]
+    build: .
+    container_name: recruiting-analytics
+    command: ["python", "-m", "recruiting.services.analytics"]
+    env_file: [{path: .env, required: false}]
+    environment: *app-env
+    depends_on: *app-deps
+    ports: ["8003:8003"]
+    restart: unless-stopped
+
+  dashboard:
+    profiles: ["apps"]
+    build: .
+    container_name: recruiting-dashboard
+    command: ["python", "app.py"]
+    env_file: [{path: .env, required: false}]
+    environment:
+      <<: *app-env
+      GRADIO_SERVER_NAME: 0.0.0.0
+    depends_on:
+      kafka-connect:
+        condition: service_healthy
+    ports: ["7860:7860"]
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------------------------
+  # Optional observability.   docker compose --profile observability up -d
+  # ---------------------------------------------------------------------------------------------
+  kafka-exporter:
+    profiles: ["observability"]
+    image: danielqsj/kafka-exporter:v1.8.0
+    container_name: kafka-exporter
+    command: ["--kafka.server=kafka:29092"]
+    depends_on:
+      kafka:
+        condition: service_healthy
+
+  prometheus:
+    profiles: ["observability"]
+    image: prom/prometheus:v2.53.0
+    container_name: prometheus
+    ports: ["9091:9090"]   # 9091 on the host because 9090 is commonly taken
+    volumes:
+      - ./infra/observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./infra/observability/alerts.yml:/etc/prometheus/alerts.yml:ro
+    extra_hosts: ["host.docker.internal:host-gateway"]
+
+  grafana:
+    profiles: ["observability"]
+    image: grafana/grafana:11.1.0
+    container_name: grafana
+    ports: ["3000:3000"]
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"        # PROD: real auth / SSO
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+    volumes:
+      - ./infra/observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    depends_on: [prometheus]
+
+volumes:
+  kafka-data:
+  pg-data:

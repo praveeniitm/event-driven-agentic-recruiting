@@ -1,0 +1,20 @@
+{
+  "type": "record",
+  "name": "DeadLetter",
+  "namespace": "com.recruiting.events",
+  "doc": "Generic dead-letter envelope used by parser-dlq and matching-dlq. original_payload holds the failed input as JSON so it can be replayed, which means parser-dlq can contain PII. PROD: lock down ACLs, short retention, and add a replay tool that re-publishes DLQ items after a fix.",
+  "fields": [
+    {"name": "application_id", "type": "string"},
+    {"name": "job_id", "type": ["null", "string"], "default": null},
+    {"name": "failed_service", "type": "string"},
+    {"name": "source_topic", "type": "string"},
+    {"name": "source_partition", "type": "int"},
+    {"name": "source_offset", "type": "long"},
+    {"name": "error_type", "type": "string"},
+    {"name": "error_message", "type": "string"},
+    {"name": "error_trace", "type": "string"},
+    {"name": "attempts", "type": "int"},
+    {"name": "original_payload", "type": "string"},
+    {"name": "failed_at", "type": "string"}
+  ]
+}

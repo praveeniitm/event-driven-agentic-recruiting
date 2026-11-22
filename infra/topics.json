@@ -1,0 +1,101 @@
+{
+  "_comment": "Single source of truth for topics and their value schemas. Read by the init container (infra/init/init.py) and by tests. JSON has no comments, so PROD notes live in prod_note fields.",
+  "defaults": {
+    "replication_factor": 1,
+    "prod_note": "PROD: replication.factor=3 and min.insync.replicas=2 with acks=all on a 3+ broker cluster."
+  },
+  "topics": [
+    {
+      "name": "job-requisitions",
+      "partitions": 2,
+      "config": {
+        "cleanup.policy": "compact",
+        "min.cleanable.dirty.ratio": "0.01",
+        "segment.ms": "60000",
+        "delete.retention.ms": "1000"
+      },
+      "value_schema": "job_requisition.avsc",
+      "prod_note": "Aggressive compaction settings are for the demo only. PROD: use defaults (dirty ratio 0.5, segment.ms 7d) or compact,delete with a long retention."
+    },
+    {
+      "name": "candidate-applications",
+      "partitions": 3,
+      "config": {
+        "cleanup.policy": "delete",
+        "retention.ms": "604800000"
+      },
+      "value_schema": "candidate_application.avsc",
+      "prod_note": "Contains PII. PROD: shorter retention, ACLs, encryption at rest."
+    },
+    {
+      "name": "parsed-resumes",
+      "partitions": 3,
+      "config": {
+        "cleanup.policy": "delete",
+        "retention.ms": "604800000"
+      },
+      "value_schema": "parsed_resume.avsc",
+      "prod_note": "Same partition count as candidate-applications keeps job_id ordering end to end."
+    },
+    {
+      "name": "parser-dlq",
+      "partitions": 1,
+      "config": {
+        "cleanup.policy": "delete",
+        "retention.ms": "1209600000"
+      },
+      "value_schema": "dead_letter.avsc",
+      "prod_note": "PROD: alert on any message here and keep retention long enough for a human to triage."
+    },
+    {
+      "name": "matching-dlq",
+      "partitions": 1,
+      "config": {
+        "cleanup.policy": "delete",
+        "retention.ms": "1209600000"
+      },
+      "value_schema": "dead_letter.avsc",
+      "prod_note": "Added beyond the PRD: matching failures (LLM errors, schema issues) need a DLQ too."
+    },
+    {
+      "name": "candidate-scores",
+      "partitions": 3,
+      "config": {
+        "cleanup.policy": "delete",
+        "retention.ms": "604800000"
+      },
+      "value_schema": "candidate_score.avsc",
+      "prod_note": "Sunk to Postgres by Kafka Connect, so Kafka retention only needs to cover sink downtime."
+    },
+    {
+      "name": "pii-audit-log",
+      "partitions": 1,
+      "config": {
+        "cleanup.policy": "delete",
+        "retention.ms": "86400000"
+      },
+      "value_schema": "pii_audit.avsc",
+      "prod_note": "Holds raw PII for audit. 1 day retention in the demo. PROD: encrypt payloads, restrict ACLs, archive to a compliance store."
+    },
+    {
+      "name": "job-stats",
+      "partitions": 2,
+      "config": {
+        "cleanup.policy": "compact",
+        "min.cleanable.dirty.ratio": "0.1",
+        "segment.ms": "60000"
+      },
+      "value_schema": "job_stats.avsc",
+      "prod_note": "Output of the bytewax analytics job, latest value per job_id."
+    },
+    {
+      "name": "connect-dlq",
+      "partitions": 1,
+      "config": {
+        "cleanup.policy": "delete",
+        "retention.ms": "1209600000"
+      },
+      "prod_note": "Kafka Connect error sink: records the JDBC sink could not write (bad schema, constraint violation). Raw bytes, so no value schema. PROD: alert on any message here."
+    }
+  ]
+}

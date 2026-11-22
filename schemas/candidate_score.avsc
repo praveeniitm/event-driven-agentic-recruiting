@@ -1,0 +1,19 @@
+{
+  "type": "record",
+  "name": "CandidateScore",
+  "namespace": "com.recruiting.events",
+  "doc": "Final AI decision for one application. Sunk to Postgres by Kafka Connect.",
+  "fields": [
+    {"name": "application_id", "type": "string"},
+    {"name": "job_id", "type": "string"},
+    {"name": "anonymized_id", "type": "string"},
+    {"name": "fit_score", "type": "int", "doc": "0-100, validated by the producer."},
+    {"name": "recommendation", "type": {"type": "enum", "name": "Recommendation", "symbols": ["STRONG_HIRE", "INTERVIEW", "REJECT"]}},
+    {"name": "reasoning", "type": "string"},
+    {"name": "suggested_interview_questions", "type": {"type": "array", "items": "string"}},
+    {"name": "job_title", "type": "string", "default": ""},
+    {"name": "model", "type": "string", "default": ""},
+    {"name": "prompt_version", "type": "string", "default": ""},
+    {"name": "scored_at", "type": "string", "default": ""}
+  ]
+}

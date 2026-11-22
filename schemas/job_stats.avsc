@@ -1,0 +1,15 @@
+{
+  "type": "record",
+  "name": "JobStats",
+  "namespace": "com.recruiting.events",
+  "doc": "Rolling per-job aggregates produced by the bytewax analytics service. Compacted topic keyed by job_id, so consumers always see the latest numbers.",
+  "fields": [
+    {"name": "job_id", "type": "string"},
+    {"name": "candidates_scored", "type": "int"},
+    {"name": "avg_fit_score", "type": "double"},
+    {"name": "strong_hire_count", "type": "int"},
+    {"name": "interview_count", "type": "int"},
+    {"name": "reject_count", "type": "int"},
+    {"name": "updated_at", "type": "string"}
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "type": "record",
+  "name": "CandidateApplication",
+  "namespace": "com.recruiting.events",
+  "doc": "Raw application. CONTAINS PII (name, email, resume text). PROD: restrict topic ACLs, encrypt at rest, short retention, or tokenise PII at the edge before it reaches Kafka.",
+  "fields": [
+    {"name": "application_id", "type": "string", "doc": "UUID."},
+    {"name": "job_id", "type": "string"},
+    {"name": "candidate_name", "type": "string"},
+    {"name": "candidate_email", "type": "string"},
+    {"name": "raw_resume_text", "type": "string"},
+    {"name": "timestamp", "type": "string", "doc": "ISO-8601 UTC submission time."}
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "type": "record",
+  "name": "JobRequisition",
+  "namespace": "com.recruiting.events",
+  "doc": "Latest definition of a job opening. Topic is compacted, key = job_id. A tombstone is never used; closing a job is modelled with status=CLOSED so downstream state stores learn about it. PROD: add schema-level owner/team metadata in Schema Registry.",
+  "fields": [
+    {"name": "job_id", "type": "string"},
+    {"name": "title", "type": "string"},
+    {"name": "department", "type": "string"},
+    {"name": "required_skills", "type": {"type": "array", "items": "string"}},
+    {"name": "min_experience_years", "type": "int"},
+    {"name": "status", "type": {"type": "enum", "name": "JobStatus", "symbols": ["OPEN", "CLOSED"]}},
+    {"name": "description", "type": "string", "default": "", "doc": "Free-text job description used by the matching LLM."},
+    {"name": "updated_at", "type": "string", "default": "", "doc": "ISO-8601 UTC time of this edit."}
+  ]
+}

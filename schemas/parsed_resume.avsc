@@ -1,0 +1,17 @@
+{
+  "type": "record",
+  "name": "ParsedResume",
+  "namespace": "com.recruiting.events",
+  "doc": "PII-free structured candidate profile. anonymized_id = SHA-256 of the lower-cased email (PROD: use HMAC with a secret key, plain hashes of emails can be reversed by dictionary attack).",
+  "fields": [
+    {"name": "application_id", "type": "string"},
+    {"name": "job_id", "type": "string"},
+    {"name": "anonymized_id", "type": "string"},
+    {"name": "extracted_skills", "type": {"type": "array", "items": "string"}},
+    {"name": "total_experience_years", "type": "float"},
+    {"name": "summary", "type": "string"},
+    {"name": "model", "type": "string", "default": "", "doc": "LLM that produced the extraction (lineage)."},
+    {"name": "prompt_version", "type": "string", "default": "", "doc": "Prompt revision (lineage, used by eval to compare versions)."},
+    {"name": "parsed_at", "type": "string", "default": ""}
+  ]
+}

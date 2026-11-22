@@ -1,0 +1,14 @@
+{
+  "type": "record",
+  "name": "PiiAuditRecord",
+  "namespace": "com.recruiting.events",
+  "doc": "Audit trail of what PII was found and removed for one application. Holds RAW PII so the topic has short retention and should be locked down. PROD: encrypt values (envelope encryption / KMS), dedicated ACLs, ship to a compliance store instead of Kafka.",
+  "fields": [
+    {"name": "application_id", "type": "string"},
+    {"name": "anonymized_id", "type": "string"},
+    {"name": "redacted_fields", "type": {"type": "array", "items": "string"}, "doc": "Kinds of PII removed, e.g. EMAIL, PHONE, NAME, ADDRESS."},
+    {"name": "raw_pii", "type": {"type": "map", "values": "string"}, "doc": "kind -> raw value (sensitive)."},
+    {"name": "redaction_count", "type": "int"},
+    {"name": "audited_at", "type": "string"}
+  ]
+}
